@@ -3,7 +3,9 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 
 const app = express();
-app.use(cors({ origin: 'https://stirring-daffodil-9817b5.netlify.app' }));
+
+app.use(cors());
+app.options('*', cors());
 app.use(express.json());
 
 app.post('/api/chat', async (req, res) => {
@@ -24,4 +26,6 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000);
+app.listen(process.env.PORT || 3000, () => {
+  console.log('Proxy avviato su porta', process.env.PORT || 3000);
+});
