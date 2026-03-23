@@ -9,9 +9,13 @@ app.use(express.json());
 
 app.post('/api/chat', async (req, res) => {
   try {
-    // Converti formato Anthropic → Gemini
     const messages = req.body.messages || [];
-    const prompt = messages.map(m => m.content).join('\n');
+    
+    // Prendi l'ultimo messaggio utente come prompt principale
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    const prompt = lastUserMsg ? lastUserMsg.content : messages.map(m => m.content).join('\n');
+
+    console.log('Prompt ricevuto:', prompt.slice(0, 200));
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
@@ -19,18 +23,31 @@ app.post('/api/chat', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: 1000 }
+          contents: [{ 
+            role: 'user',
+            parts: [{ text: prompt }] 
+          }],
+          generationConfig: { 
+            maxOutputTokens: 1000,
+            temperature: 0.3
+          }
         })
       }
     );
 
     const data = await response.json();
+    console.log('Gemini response:', JSON.stringify(data).slice(0, 300));
+    
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    if (!text) {
+      console.error('Risposta vuota da Gemini:', JSON.stringify(data));
+      return res.status(500).json({ error: 'Risposta vuota da Gemini', details: data });
+    }
 
-    // Rispondi nel formato Anthropic così il frontend non cambia
     res.json({ content: [{ type: 'text', text }] });
   } catch (err) {
+    console.error('Errore proxy:', err);
     res.status(500).json({ error: err.message });
   }
 });
