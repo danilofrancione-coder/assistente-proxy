@@ -21,6 +21,27 @@ webpush.setVapidDetails(
 // Memoria dei timer attivi e delle subscription
 const timers = {};
 const subscriptions = {}; // { deviceId: subscription }
+// Promemoria pendenti in attesa di subscription
+const pendingSchedules = {}; // { deviceId: [{ reminderId, text, fireAt }] }
+
+async function sendPushNotification(deviceId, reminderId, text) {
+  const sub = subscriptions[deviceId];
+  if (!sub) {
+    console.warn('Nessuna subscription per deviceId:', deviceId);
+    return;
+  }
+  try {
+    await webpush.sendNotification(sub, JSON.stringify({
+      title: '⏰ ' + text,
+      body: 'Tocca per gestire',
+      id: reminderId
+    }));
+    console.log('Notifica inviata per:', text);
+  } catch (err) {
+    console.error('Errore invio notifica:', err.message);
+    if (err.statusCode === 410) delete subscriptions[deviceId];
+  }
+}
 
 // ===== PROXY ANTHROPIC =====
 app.post('/api/chat', async (req, res) => {
@@ -47,6 +68,21 @@ app.post('/api/subscribe', (req, res) => {
   if (!deviceId || !subscription) return res.status(400).json({ error: 'Mancano deviceId o subscription' });
   subscriptions[deviceId] = subscription;
   console.log('Dispositivo registrato:', deviceId);
+
+  // Invia notifiche pendenti che erano in attesa di questa subscription
+  const pending = pendingSchedules[deviceId] || [];
+  for (const p of pending) {
+    const delay = p.fireAt - Date.now();
+    if (delay > 0) {
+      if (timers[p.reminderId]) clearTimeout(timers[p.reminderId]);
+      timers[p.reminderId] = setTimeout(() => {
+        sendPushNotification(deviceId, p.reminderId, p.text);
+        delete timers[p.reminderId];
+      }, delay);
+      console.log(`Timer ripristinato per "${p.text}" tra ${Math.round(delay/60000)} minuti`);
+    }
+  }
+  delete pendingSchedules[deviceId];
   res.json({ ok: true });
 });
 
@@ -74,26 +110,13 @@ app.post('/api/schedule', (req, res) => {
     return res.json({ ok: true, skipped: true, reason: 'Oltre 7 giorni, non schedulo' });
   }
 
+  // Salva come pendente in caso la subscription non sia ancora arrivata
+  if (!pendingSchedules[deviceId]) pendingSchedules[deviceId] = [];
+  pendingSchedules[deviceId] = pendingSchedules[deviceId].filter(p => p.reminderId !== reminderId);
+  pendingSchedules[deviceId].push({ reminderId, text, fireAt });
+
   timers[reminderId] = setTimeout(async () => {
-    const sub = subscriptions[deviceId];
-    if (!sub) {
-      console.warn('Nessuna subscription per deviceId:', deviceId);
-      return;
-    }
-    try {
-      await webpush.sendNotification(sub, JSON.stringify({
-        title: '⏰ ' + text,
-        body: 'Tocca per gestire',
-        id: reminderId
-      }));
-      console.log('Notifica inviata per:', text);
-    } catch (err) {
-      console.error('Errore invio notifica:', err.message);
-      if (err.statusCode === 410) {
-        // Subscription scaduta
-        delete subscriptions[deviceId];
-      }
-    }
+    await sendPushNotification(deviceId, reminderId, text);
     delete timers[reminderId];
   }, delay);
 
